@@ -1,0 +1,17 @@
+# Goal
+string pattern
+int32[] color
+int32[] secondary_color
+float32 brightness
+float32 speed
+float32 duration
+bool loop
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float32 percent_complete
+int32 current_step
+string message
