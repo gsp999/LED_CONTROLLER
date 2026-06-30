@@ -17,6 +17,7 @@ ament_python_install_package(led_controller_nodes)
 
 install(PROGRAMS
   scripts/led_action_server
+  scripts/led_state_camera_recognizer
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -9,6 +9,7 @@ import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from std_srvs.srv import Trigger
 
 from led_controller.action import LedPattern
 
@@ -75,7 +76,7 @@ class Ft232hSpiBackend(LedBackend):
         import neopixel_spi
 
         order_name = pixel_order.upper()
-        order = getattr(neopixel_spi, order_name, neopixel_spi.GRB)
+        order = self._resolve_pixel_order(order_name)
         self._pixels = neopixel_spi.NeoPixel_SPI(
             board.SPI(),
             led_count,
@@ -89,6 +90,13 @@ class Ft232hSpiBackend(LedBackend):
             self._pixels[index] = color
         self._pixels.show()
 
+    @staticmethod
+    def _resolve_pixel_order(pixel_order: str):
+        channel_index = {'R': 0, 'G': 1, 'B': 2, 'W': 3}
+        if set(pixel_order).issubset(channel_index) and len(pixel_order) in (3, 4):
+            return tuple(channel_index[channel] for channel in pixel_order)
+        return tuple(channel_index[channel] for channel in 'BRG')
+
 
 @dataclass
 class PatternContext:
@@ -101,7 +109,6 @@ class PatternContext:
     brightness: float
     speed: float
     duration: float
-    loop: bool
 
     def publish_feedback(self, percent: float, step: int, message: str) -> None:
         feedback = LedPattern.Feedback()
@@ -119,9 +126,10 @@ class LedActionServer(Node):
         super().__init__('led_action_server')
         self.declare_parameter('led_count', 60)
         self.declare_parameter('backend', 'simulate')
-        self.declare_parameter('pixel_order', 'GRB')
+        self.declare_parameter('pixel_order', 'BRG')
         self.declare_parameter('default_brightness', 0.4)
         self.declare_parameter('action_name', 'led_pattern')
+        self.declare_parameter('cancel_service_name', 'cancel_led_pattern')
         self.declare_parameter('frame_rate', 40.0)
 
         self.led_count = int(self.get_parameter('led_count').value)
@@ -130,8 +138,10 @@ class LedActionServer(Node):
         backend_name = str(self.get_parameter('backend').value)
         pixel_order = str(self.get_parameter('pixel_order').value)
         action_name = str(self.get_parameter('action_name').value)
+        cancel_service_name = str(self.get_parameter('cancel_service_name').value)
 
         self._backend = self._make_backend(backend_name, pixel_order)
+        self._stop_requested = False
         self._patterns = {
             'solid': self._solid,
             'blink': self._blink,
@@ -142,6 +152,15 @@ class LedActionServer(Node):
             'comet': self._comet,
             'sparkle': self._sparkle,
             'police': self._police,
+            'lightning': self._lightning,
+            'scanner_flash': self._scanner_flash,
+            'state_1_green_single_pulse': self._state_1_green_single_pulse,
+            'state_2_blue_slow_pulse': self._state_2_blue_slow_pulse,
+            'state_3_yellow_slow_blink': self._state_3_yellow_slow_blink,
+            'state_4_red_fast_blink': self._state_4_red_fast_blink,
+            'state_5_magenta_double_pulse': self._state_5_magenta_double_pulse,
+            'state_6_orange_five_pulse': self._state_6_orange_five_pulse,
+            'state_7_white_heartbeat': self._state_7_white_heartbeat,
             'color_cycle': self._color_cycle,
         }
         self._active_goal = False
@@ -153,8 +172,14 @@ class LedActionServer(Node):
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
         )
+        self._cancel_service = self.create_service(
+            Trigger,
+            cancel_service_name,
+            self.cancel_pattern_callback,
+        )
         self.get_logger().info(
-            f'LED action server ready: action=/{action_name}, backend={self._backend.name}, leds={self.led_count}'
+            f'LED action server ready: action=/{action_name}, cancel_service=/{cancel_service_name}, '
+            f'backend={self._backend.name}, leds={self.led_count}'
         )
 
     def destroy_node(self) -> bool:
@@ -186,6 +211,14 @@ class LedActionServer(Node):
         self.get_logger().info('cancel requested')
         return CancelResponse.ACCEPT
 
+    def cancel_pattern_callback(self, request, response):
+        del request
+        self._stop_requested = True
+        self._backend.clear()
+        response.success = True
+        response.message = 'cancel requested for current LED pattern'
+        return response
+
     def execute_callback(self, goal_handle):
         request = goal_handle.request
         pattern = request.pattern.strip().lower()
@@ -200,13 +233,13 @@ class LedActionServer(Node):
             brightness=clamp(brightness, 0.0, 1.0),
             speed=max(float(request.speed), 0.05),
             duration=max(float(request.duration), 0.0),
-            loop=bool(request.loop),
         )
 
         result = LedPattern.Result()
         self._active_goal = True
+        self._stop_requested = False
         self.get_logger().info(
-            f'goal accepted pattern={pattern} duration={ctx.duration:.2f}s loop={ctx.loop}'
+            f'goal accepted pattern={pattern} duration={ctx.duration:.2f}s'
         )
 
         started = self.get_clock().now()
@@ -214,7 +247,7 @@ class LedActionServer(Node):
         try:
             while rclpy.ok():
                 for pixels in self._patterns[pattern](ctx):
-                    if goal_handle.is_cancel_requested:
+                    if goal_handle.is_cancel_requested or self._stop_requested:
                         goal_handle.canceled()
                         self._backend.clear()
                         result.success = False
@@ -236,8 +269,13 @@ class LedActionServer(Node):
                     step += 1
                     time.sleep(ctx.frame_delay / ctx.speed)
 
-                if not ctx.loop and ctx.duration <= 0.0:
-                    break
+                if ctx.duration <= 0.0:
+                    continue
+
+                elapsed = (self.get_clock().now() - started).nanoseconds / 1_000_000_000.0
+                if elapsed < ctx.duration:
+                    continue
+                break
 
             goal_handle.succeed()
             self._backend.clear()
@@ -256,6 +294,29 @@ class LedActionServer(Node):
 
     def _solid(self, ctx: PatternContext) -> Iterable[List[Color]]:
         yield [ctx.color] * ctx.led_count
+
+    def _all_pixels(self, ctx: PatternContext, color: Color) -> List[Color]:
+        return [color] * ctx.led_count
+
+    def _hold_color(
+        self,
+        ctx: PatternContext,
+        color: Color,
+        seconds: float,
+    ) -> Iterable[List[Color]]:
+        frames = max(1, int(self.frame_rate * seconds))
+        for _ in range(frames):
+            yield self._all_pixels(ctx, color)
+
+    def _pulse_sequence(
+        self,
+        ctx: PatternContext,
+        color: Color,
+        sequence: Sequence[Tuple[bool, float]],
+    ) -> Iterable[List[Color]]:
+        for is_on, seconds in sequence:
+            actual_color = color if is_on else (0, 0, 0)
+            yield from self._hold_color(ctx, actual_color, seconds)
 
     def _blink(self, ctx: PatternContext) -> Iterable[List[Color]]:
         frames = max(1, int(self.frame_rate * 0.35))
@@ -326,6 +387,149 @@ class LedActionServer(Node):
             pixels = [left] * half + [right] * (ctx.led_count - half)
             for _ in range(frames):
                 yield pixels
+
+    def _state_1_green_single_pulse(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        yield from self._pulse_sequence(
+            ctx,
+            (0, 255, 0),
+            [
+                (True, 0.18),
+                (False, 0.82),
+            ],
+        )
+
+    def _state_2_blue_slow_pulse(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        color = (0, 80, 255)
+        base = (0, 0, 12)
+        frames = max(12, int(self.frame_rate * 1.6))
+        for index in range(frames):
+            wave = (1.0 - math.cos(index / frames * math.tau)) / 2.0
+            yield self._all_pixels(ctx, blend(base, color, wave))
+
+    def _state_3_yellow_slow_blink(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        yield from self._pulse_sequence(
+            ctx,
+            (255, 180, 0),
+            [
+                (True, 0.24),
+                (False, 0.24),
+                (True, 0.24),
+                (False, 0.78),
+            ],
+        )
+
+    def _state_4_red_fast_blink(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        yield from self._pulse_sequence(
+            ctx,
+            (220, 0, 0),
+            [
+                (True, 0.16),
+                (False, 0.14),
+                (True, 0.16),
+                (False, 0.14),
+                (True, 0.16),
+                (False, 0.14),
+                (True, 0.16),
+                (False, 0.70),
+            ],
+        )
+
+    def _state_5_magenta_double_pulse(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        yield from self._pulse_sequence(
+            ctx,
+            (255, 0, 180),
+            [
+                (True, 0.12),
+                (False, 0.12),
+                (True, 0.32),
+                (False, 0.84),
+            ],
+        )
+
+    def _state_6_orange_five_pulse(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        yield from self._pulse_sequence(
+            ctx,
+            (255, 90, 0),
+            [
+                (True, 0.08),
+                (False, 0.08),
+                (True, 0.08),
+                (False, 0.08),
+                (True, 0.08),
+                (False, 0.08),
+                (True, 0.08),
+                (False, 0.08),
+                (True, 0.08),
+                (False, 0.70),
+            ],
+        )
+
+    def _state_7_white_heartbeat(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        yield from self._pulse_sequence(
+            ctx,
+            (255, 255, 255),
+            [
+                (True, 0.08),
+                (False, 0.10),
+                (True, 0.08),
+                (False, 0.10),
+                (True, 0.36),
+                (False, 0.78),
+            ],
+        )
+
+    def _lightning(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        flashes = random.randint(3, 7)
+        for flash in range(flashes):
+            intensity = random.uniform(0.45, 1.0)
+            flash_color = blend(ctx.color, (255, 255, 255), intensity * 0.55)
+            active_count = random.randint(max(1, ctx.led_count // 5), max(1, ctx.led_count // 2))
+            active_indexes = set(random.sample(range(ctx.led_count), k=min(active_count, ctx.led_count)))
+            pixels = [
+                blend(ctx.secondary_color, flash_color, random.uniform(0.65, 1.0))
+                if index in active_indexes
+                else ctx.secondary_color
+                for index in range(ctx.led_count)
+            ]
+            for _ in range(random.randint(1, 3)):
+                yield pixels
+
+            dark_frames = random.randint(1, max(2, int(self.frame_rate * 0.08)))
+            dim_tail = blend(ctx.secondary_color, ctx.color, 0.08 + flash * 0.03)
+            for _ in range(dark_frames):
+                yield [dim_tail] * ctx.led_count
+
+        rest_frames = random.randint(
+            max(2, int(self.frame_rate * 0.12)),
+            max(3, int(self.frame_rate * 0.45)),
+        )
+        for _ in range(rest_frames):
+            yield [ctx.secondary_color] * ctx.led_count
+
+    def _scanner_flash(self, ctx: PatternContext) -> Iterable[List[Color]]:
+        segment_count = 6
+        segment_size = max(1, math.ceil(ctx.led_count / segment_count))
+        hold_frames = max(1, int(self.frame_rate * 0.05))
+        fade_frames = max(2, int(self.frame_rate * 0.12))
+
+        for segment in range(segment_count):
+            start = segment * segment_size
+            end = min(ctx.led_count, start + segment_size)
+            pixels = [ctx.secondary_color] * ctx.led_count
+            for index in range(start, end):
+                pixels[index] = ctx.color
+            for _ in range(hold_frames):
+                yield pixels
+
+        for step in range(fade_frames):
+            amount = 1.0 - step / fade_frames
+            flash_color = blend(ctx.secondary_color, ctx.color, amount)
+            yield [flash_color] * ctx.led_count
+
+        for phase in range(4):
+            color = ctx.color if phase % 2 == 0 else ctx.secondary_color
+            for _ in range(max(1, int(self.frame_rate * 0.06))):
+                yield [color] * ctx.led_count
 
     def _color_cycle(self, ctx: PatternContext) -> Iterable[List[Color]]:
         palette = [

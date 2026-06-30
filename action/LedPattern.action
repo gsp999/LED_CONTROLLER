@@ -5,7 +5,6 @@ int32[] secondary_color
 float32 brightness
 float32 speed
 float32 duration
-bool loop
 ---
 # Result
 bool success
