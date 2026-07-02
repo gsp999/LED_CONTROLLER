@@ -1,0 +1,9 @@
+{
+  "g0:red@0|g1:green@1|g2:blue@3": "state_1",
+  "g0:red@1|g1:green@0|g2:blue@3": "state_2",
+  "g0:red@3|g1:green@1|g2:blue@0": "state_3",
+  "g0:yellow@0|g1:blue@1|g2:red@3": "state_4",
+  "g0:cyan@1|g1:magenta@0|g2:yellow@3": "state_5",
+  "g0:white@0|g1:red@1|g2:green@3": "state_6",
+  "g0:blue@1|g1:yellow@3|g2:magenta@0": "state_7"
+}

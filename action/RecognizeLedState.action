@@ -1,0 +1,25 @@
+# Goal
+int32 camera_index
+float32 duration
+int32 expected_groups
+float32 min_value
+float32 min_saturation
+bool show_debug
+string state_map_path
+---
+# Result
+bool success
+string message
+string signature
+string state_name
+string[] group_colors
+float32[] group_frequencies
+int32[] group_boxes
+---
+# Feedback
+float32 percent_complete
+string message
+string signature
+string[] group_colors
+float32[] group_frequencies
+int32[] group_boxes

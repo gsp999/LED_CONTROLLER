@@ -1,219 +1,109 @@
 # LED_CONTROLLER
 
-这是一个 ROS 2 Jazzy 节点，用 FT232H USB 转 SPI 控制 WS2811 LED 灯带。当前版本不使用预设灯效，只提供一个 action：按组控制颜色、亮度、闪烁频率和持续时间。
+ROS 2 Jazzy 工程，用 FT232H 控制 WS2811 灯带，并提供摄像头识别灯组状态的 action。
 
-## 1. 先改路径
+当前有两个 action：
 
-下面所有命令都用 `REPO_DIR` 表示仓库路径。别人拿到仓库后，只需要把这一行改成自己电脑上的实际路径：
+- `/led_pattern`: 控制灯组颜色、亮度、闪烁频率。
+- `/recognize_led_state`: 用摄像头自动识别 3 组灯的颜色和闪烁频率。
 
-```bash
-export REPO_DIR=/home/gsp/LED_CONTROLLER
-```
-
-如果仓库放在 `~/ros2_ws/src/LED_CONTROLLER`，就改成：
-
-```bash
-export REPO_DIR=~/ros2_ws/src/LED_CONTROLLER
-```
-
-后面的命令都从这个路径进入：
-
-```bash
-cd $REPO_DIR
-```
-
-README 里的 `/home/gsp/LED_CONTROLLER` 只是示例路径。给别人用时，先让对方把所有 `export REPO_DIR=...` 改成自己的仓库路径。
-
-## 2. 需要安装什么
-
-系统需要 Ubuntu + ROS 2 Jazzy，并且已经安装好 `colcon`。如果没有，可以先装：
+## 1. 安装依赖
 
 ```bash
 sudo apt update
-sudo apt install python3-colcon-common-extensions python3-pip
+sudo apt install python3-colcon-common-extensions python3-pip python3-opencv
 ```
 
-这个包本身用到的 ROS 依赖在 `package.xml` 里声明了，主要是：
-
-- `rclpy`
-- `action_msgs`
-- `std_msgs`
-- `std_srvs`
-- `builtin_interfaces`
-- `rosidl_default_generators`
-- `rosidl_default_runtime`
-
-如果你的 ROS Jazzy 是完整安装，一般已经有这些依赖。
-
-也可以在仓库目录里用 `rosdep` 检查并安装 ROS 依赖：
-
-```bash
-export REPO_DIR=/home/gsp/LED_CONTROLLER
-cd $REPO_DIR
-source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths . --ignore-src -r -y
-```
-
-硬件模式还需要 FT232H/NeoPixel Python 库：
+硬件控制 FT232H 还需要：
 
 ```bash
 /usr/bin/python3 -m pip install --user adafruit-blinka adafruit-circuitpython-neopixel-spi
 ```
 
-如果系统提示 Python 环境受保护，用：
+如果 pip 提示系统 Python 受保护，用：
 
 ```bash
 /usr/bin/python3 -m pip install --user --break-system-packages adafruit-blinka adafruit-circuitpython-neopixel-spi
 ```
 
-检查库是否可用：
+## 2. 配置
 
-```bash
-BLINKA_FT232H=1 /usr/bin/python3 -c "import board; import neopixel_spi; print('ok')"
-```
-
-如果这里报 USB 权限错误，可以临时用 `sudo` 验证是不是权限问题：
-
-```bash
-BLINKA_FT232H=1 sudo -E /usr/bin/python3 -c "import board; import neopixel_spi; print('ok')"
-```
-
-长期使用建议添加 FT232H udev 规则。新建文件：
-
-```bash
-sudo nano /etc/udev/rules.d/99-ft232h.rules
-```
-
-写入：
-
-```text
-SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6014", MODE="0666"
-```
-
-然后重新加载规则并重新插拔 FT232H：
-
-```bash
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-```
-
-## 3. 需要改哪些配置
-
-配置文件在：
+主要配置文件：
 
 ```text
 config/led_controller.yaml
 ```
 
-当前默认配置：
+常用参数：
 
 ```yaml
-led_action_server:
-  ros__parameters:
-    led_count: 60
-    backend: "hardware"
-    pixel_order: "BRG"
-    default_brightness: 0.4
-    action_name: "led_pattern"
-    cancel_service_name: "cancel_led_pattern"
-    frame_rate: 40.0
+led_count: 60
+backend: "simulate"
+pixel_order: "BRG"
+default_brightness: 0.4
+frame_rate: 40.0
 ```
 
-一般只需要改这几个：
+说明：
 
-- `led_count`: 可控组数量。你的 WS2811 现在是 6 个物理灯为 1 组，所以这里写“组数”，不是物理灯珠总数。
-- `backend`: 接硬件时用 `"hardware"`；不接灯带、只测试 action 通信时用 `"simulate"`。
-- `pixel_order`: 颜色顺序。当前灯带是 `"BRG"`。如果红绿蓝显示不对，优先改这里。
+- `led_count`: 可控组数量。你的 WS2811 是 6 个物理灯珠为 1 组。
+- `backend`: `"simulate"` 是仿真；接 FT232H 硬件时改成 `"hardware"`。
+- `pixel_order`: 当前灯带颜色顺序是 `"BRG"`，颜色不对就先改这里。
 - `default_brightness`: 默认亮度，范围 `0.0-1.0`。
 
-## 4. 构建
-
-如果当前终端启用了 conda，先退出 conda，并清掉 conda 留下的动态库路径：
+## 3. 构建
 
 ```bash
+cd /home/gsp/LED_CONTROLLER
 conda deactivate
 unset LD_LIBRARY_PATH
-```
-
-然后构建：
-
-```bash
-export REPO_DIR=/home/gsp/LED_CONTROLLER
-cd $REPO_DIR
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select led_controller --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/setup.bash
 ```
 
-如果改过 action 文件，建议干净重建：
+如果改过 `action/*.action`，用干净重建：
 
 ```bash
-cd $REPO_DIR
+cd /home/gsp/LED_CONTROLLER
 source /opt/ros/jazzy/setup.bash
 rm -rf build install log
 colcon build --packages-select led_controller --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/setup.bash
 ```
 
-## 5. 启动节点
+## 4. 启动控灯节点
 
-硬件模式启动：
+仿真模式：
 
 ```bash
-export REPO_DIR=/home/gsp/LED_CONTROLLER
-cd $REPO_DIR
-conda deactivate
-unset LD_LIBRARY_PATH
+cd /home/gsp/LED_CONTROLLER
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 launch led_controller led_controller.launch.py
+```
+
+硬件模式：
+
+先把 `config/led_controller.yaml` 里的 `backend` 改成 `"hardware"`，然后启动：
+
+```bash
+cd /home/gsp/LED_CONTROLLER
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 export BLINKA_FT232H=1
 ros2 launch led_controller led_controller.launch.py
 ```
 
-看到类似日志说明启动成功：
+## 5. Action 1：控制灯组
 
-```text
-LED group controller ready: action=/led_pattern, cancel_service=/cancel_led_pattern, backend=hardware, groups=60
-```
-
-模拟模式启动前，先把 `config/led_controller.yaml` 里的 `backend` 改成 `"simulate"`，然后：
-
-```bash
-cd $REPO_DIR
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ros2 launch led_controller led_controller.launch.py
-```
-
-## 6. 硬件接线
-
-- FT232H `SCK` 接 WS2811 灯带 `DIN`
-- `DIN` 前串一个 330-500 欧姆电阻
-- FT232H `GND`、灯带电源 `GND`、外部电源 `GND` 必须共地
-- 灯带电源根据你的灯带选择 5V 或 12V
-- 不要直接从 FT232H 给整条灯带供电
-
-如果 Linux 能看到 FT232H：
-
-```bash
-lsusb
-```
-
-正常会看到类似：
-
-```text
-0403:6014 Future Technology Devices International, Ltd FT232H
-```
-
-## 7. Action 接口
-
-action 名称：
+Action 名称：
 
 ```text
 /led_pattern
 ```
 
-action 类型：
+Action 类型：
 
 ```text
 led_controller/action/LedPattern
@@ -222,32 +112,11 @@ led_controller/action/LedPattern
 Goal 字段：
 
 ```text
-int32[] groups
-int32[] colors
-float32[] brightnesses
-float32[] blink_hz
-float32 duration
-```
-
-字段含义：
-
-- `groups`: 要控制的组号。`groups: [0]` 是第 1 组，`groups: [1]` 是第 2 组。空数组 `[]` 表示全部组。
-- `colors`: RGB 数组。每 3 个数是一组颜色，按 `groups` 顺序对应。
-- `brightnesses`: 亮度数组，范围 `0.0-1.0`。给 1 个值就是所有组共用；给多个值就是逐组对应。
-- `blink_hz`: 闪烁频率数组。给 1 个值就是所有组共用；给多个值就是逐组对应。`0.0` 表示常亮。
-- `duration`: 持续时间。`duration > 0` 到时间自动结束并关灯；`duration = 0.0` 一直运行，直到取消。
-
-## 8. 发送命令
-
-另开一个终端，先加载环境：
-
-```bash
-export REPO_DIR=/home/gsp/LED_CONTROLLER
-cd $REPO_DIR
-conda deactivate
-unset LD_LIBRARY_PATH
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
+groups          # 要控制的组号，[] 表示全部组
+colors          # RGB，按 groups 顺序，每组 3 个数
+brightnesses    # 亮度，1 个值表示所有组共用
+blink_hz        # 闪烁频率，0.0 表示常亮
+duration        # 秒；0.0 表示一直运行，直到取消
 ```
 
 第 0 组红色常亮 5 秒：
@@ -258,23 +127,7 @@ ros2 action send_goal /led_pattern led_controller/action/LedPattern \
 --feedback
 ```
 
-第 0、1、2 组全部绿色，2Hz 闪烁，一直运行：
-
-```bash
-ros2 action send_goal /led_pattern led_controller/action/LedPattern \
-"{groups: [0, 1, 2], colors: [0, 255, 0], brightnesses: [0.5], blink_hz: [2.0], duration: 0.0}" \
---feedback
-```
-
-第 0、1、2 组分别红、绿、蓝，亮度不同，常亮：
-
-```bash
-ros2 action send_goal /led_pattern led_controller/action/LedPattern \
-"{groups: [0, 1, 2], colors: [255, 0, 0, 0, 255, 0, 0, 0, 255], brightnesses: [0.3, 0.5, 0.8], blink_hz: [0.0], duration: 0.0}" \
---feedback
-```
-
-第 0、1、2 组分别红、绿、蓝，频率不同：
+第 0、1、2 组分别红、绿、蓝，频率不同，一直运行：
 
 ```bash
 ros2 action send_goal /led_pattern led_controller/action/LedPattern \
@@ -282,57 +135,107 @@ ros2 action send_goal /led_pattern led_controller/action/LedPattern \
 --feedback
 ```
 
-控制全部组，白色低亮度常亮 3 秒：
-
-```bash
-ros2 action send_goal /led_pattern led_controller/action/LedPattern \
-"{groups: [], colors: [255, 255, 255], brightnesses: [0.2], blink_hz: [0.0], duration: 3.0}" \
---feedback
-```
-
-取消当前持续运行的命令并关灯：
+取消当前灯效并关灯：
 
 ```bash
 ros2 service call /cancel_led_pattern std_srvs/srv/Trigger {}
 ```
 
-## 9. 常见问题
+## 6. Action 2：摄像头识别
 
-如果颜色不对，比如红色变成绿色或蓝色，改：
+先启动识别 action server：
 
-```text
-config/led_controller.yaml
+```bash
+cd /home/gsp/LED_CONTROLLER
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 run led_controller led_camera_recognition_action_server.py
 ```
 
-里的：
+Action 名称：
+
+```text
+/recognize_led_state
+```
+
+Action 类型：
+
+```text
+led_controller/action/RecognizeLedState
+```
+
+发送识别请求：
+
+```bash
+ros2 action send_goal /recognize_led_state led_controller/action/RecognizeLedState \
+"{camera_index: -1, duration: 5.0, expected_groups: 3, min_value: 55.0, min_saturation: 45.0, show_debug: true, state_map_path: ''}" \
+--feedback
+```
+
+字段说明：
+
+- `camera_index`: 摄像头编号。`-1` 表示自动扫描。
+- `duration`: 识别持续时间，建议至少 `5.0` 秒。
+- `expected_groups`: 要识别几组灯，当前一般填 `3`。
+- `min_value`: HSV 亮度阈值，背景太亮就调高。
+- `min_saturation`: HSV 饱和度阈值，背景彩色干扰多就调高。
+- `show_debug`: 是否显示调试画面。
+- `state_map_path`: 状态映射 JSON，不需要就填空字符串。
+
+识别结果里重点看：
+
+- `signature`: 识别签名，例如 `g0:red@0|g1:green@1|g2:blue@3`
+- `group_colors`: 每组颜色
+- `group_frequencies`: 每组闪烁频率
+- `group_boxes`: 自动检测到的灯组位置框
+
+状态映射示例：
+
+```text
+config/led_state_map.example.json
+```
+
+## 7. 硬件接线
+
+- FT232H `SCK` 接 WS2811 `DIN`
+- FT232H `GND`、灯带电源 `GND`、外部电源 `GND` 必须共地
+- `DIN` 前建议串 330-500 欧姆电阻
+- 灯带用外部电源供电，不要从 FT232H 给整条灯带供电
+
+检查 FT232H：
+
+```bash
+lsusb
+```
+
+正常能看到 `0403:6014 FT232H`。
+
+## 8. 常见问题
+
+颜色不对：
 
 ```yaml
 pixel_order: "BRG"
 ```
 
-如果不接硬件只想测试 action，把：
+红绿蓝显示错位时，改 `config/led_controller.yaml` 里的 `pixel_order`。
 
-```yaml
-backend: "hardware"
-```
-
-改成：
-
-```yaml
-backend: "simulate"
-```
-
-如果 ROS launch 提示不能写入 `~/.ros/log`，可以临时把日志目录放到 `/tmp`：
-
-```bash
-mkdir -p /tmp/ros_logs
-ROS_LOG_DIR=/tmp/ros_logs ros2 launch led_controller led_controller.launch.py
-```
-
-如果使用 conda 后构建出现 CMake 或 Python 奇怪报错，重新开一个终端，执行：
+构建时 conda 报奇怪错误：
 
 ```bash
 conda deactivate
 unset LD_LIBRARY_PATH
-source /opt/ros/jazzy/setup.bash
+```
+
+摄像头打不开：
+
+```bash
+ls -l /dev/video*
+groups
+```
+
+如果用户不在 `video` 组，执行后重新登录：
+
+```bash
+sudo usermod -aG video $USER
 ```

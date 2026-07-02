@@ -11,12 +11,14 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/LedPattern.action"
+  "action/RecognizeLedState.action"
 )
 
 ament_python_install_package(led_controller_nodes)
 
 install(PROGRAMS
   scripts/led_action_server
+  scripts/led_camera_recognition_action_server.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
